@@ -75,3 +75,80 @@ h1 {
   border-color: #e74c3c;
   color: #c0392b;
 }
+
+/* 页面描述文字 */
+.desc {
+  text-align: center;
+  color: #7f8c8d;
+  margin-bottom: 28px;
+  font-size: 14px;
+}
+
+/* 表单字段（标签 + 输入框/文本域） */
+.field {
+  margin-bottom: 16px;
+}
+
+.field label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.field textarea,
+.field input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+/* token 输入行 */
+.token-row {
+  margin-bottom: 16px;
+}
+
+.token-row label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.token-row input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+}
+
+/* 进度提示 */
+.progress {
+  margin-top: 12px;
+  font-size: 13px;
+  color: #7f8c8d;
+}
+
+/* 小按钮（如复制按钮） */
+.btn-sm {
+  padding: 6px 14px;
+  font-size: 13px;
+  margin-top: 12px;
+}
+
+/* 用户列表 */
+.user-list {
+  margin: 8px 0;
+}
+
+.user-item {
+  padding: 4px 0;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 13px;
+  border-bottom: 1px solid #f0f0f0;
+}
