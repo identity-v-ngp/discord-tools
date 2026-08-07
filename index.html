@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord 运营工具集</title>
+  <!-- 引入共享样式 -->
+  <link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+
+  <div class="container">
+    <h1>Discord 运营工具集</h1>
+
+    <!-- 测试按钮：点击后向后端发请求 -->
+    <button class="btn" id="pingBtn">测试后端连接</button>
+
+    <!-- 结果显示区：展示后端返回内容或错误 -->
+    <div class="result" id="result"></div>
+  </div>
+
+  <script>
+    // 获取页面元素
+    const btn = document.getElementById('pingBtn');
+    const resultBox = document.getElementById('result');
+
+    // 点击按钮时触发
+    btn.addEventListener('click', async () => {
+      // 重置状态
+      resultBox.textContent = '请求中...';
+      resultBox.className = 'result';
+      btn.disabled = true;
+
+      try {
+        // 向 Pages Function 后端发送 GET 请求
+        const res = await fetch('/api/ping');
+
+        if (!res.ok) {
+          throw new Error('HTTP ' + res.status);
+        }
+
+        const data = await res.json();
+
+        // 显示后端返回的 message
+        resultBox.textContent = data.message;
+        resultBox.className = 'result success';
+      } catch (err) {
+        // 请求失败时显示错误
+        resultBox.textContent = '连接失败：' + err.message;
+        resultBox.className = 'result error';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+
+</body>
+</html>
