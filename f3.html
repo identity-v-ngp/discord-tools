@@ -60,6 +60,10 @@
     const progressEl = document.getElementById('progress');
     const resultEl = document.getElementById('result');
 
+    // 用户信息缓存：key=用户ID，value={name, avatar}
+    // 拉取 reaction 用户时顺便存入，展示结果时直接读取，避免额外请求
+    const userCache = new Map();
+
     /**
      * 从 Discord 消息链接中提取 频道ID 和 消息ID
      * 链接格式：https://discord.com/channels/服务器ID/频道ID/消息ID
@@ -109,9 +113,18 @@
 
           if (!users || users.length === 0) break;
 
-          // 把用户ID加入集合（自动去重）
+          // 把用户ID加入集合（自动去重），同时缓存用户信息
           for (const u of users) {
             userSet.add(u.id);
+            // 如果缓存里还没有这个用户，就存入（优先用 global_name）
+            if (!userCache.has(u.id)) {
+              userCache.set(u.id, {
+                name: u.global_name || u.username,
+                avatar: u.avatar
+                  ? 'https://cdn.discordapp.com/avatars/' + u.id + '/' + u.avatar + '.png'
+                  : 'https://cdn.discordapp.com/embed/avatars/0.png'
+              });
+            }
           }
 
           // 通知外部当前分页进度
@@ -220,7 +233,13 @@
           let html = '<strong>符合条件的用户（' + matched.length + ' 人，' + modeText + '）：</strong><br><br>';
           html += '<div class="user-list">';
           for (const id of matched) {
-            html += '<div class="user-item">' + id + '</div>';
+            // 从缓存取出用户名和头像（拉取时已存入，无需额外请求）
+            const info = userCache.get(id) || { name: '未知用户', avatar: 'https://cdn.discordapp.com/embed/avatars/0.png' };
+            html += '<div class="user-item">'
+              + '<img class="user-avatar" src="' + info.avatar + '" alt="" width="32" height="32">'
+              + '<span class="user-name">' + info.name + '</span>'
+              + '<span class="user-id">' + id + '</span>'
+              + '</div>';
           }
           html += '</div>';
           html += '<button class="btn btn-sm" id="copyBtn">一键复制所有ID</button>';
