@@ -10,7 +10,7 @@
 
   <div class="container">
     <h1>F3 · 反应交集分析</h1>
-    <p class="desc">找出同时对多条消息点过反应的用户</p>
+    <p class="desc">找出对多条消息点过反应的用户</p>
 
     <!-- token 输入区（由 core.js 动态生成） -->
     <div id="tokenArea"></div>
@@ -20,6 +20,21 @@
       <label for="linksInput">消息链接（每行一条）</label>
       <textarea id="linksInput" rows="6"
         placeholder="https://discord.com/channels/服务器ID/频道ID/消息ID&#10;https://discord.com/channels/服务器ID/频道ID/消息ID"></textarea>
+    </div>
+
+    <!-- 阈值设置区 -->
+    <div class="threshold-row">
+      <div class="field field-inline">
+        <label for="thresholdN">重合阈值 N</label>
+        <input type="number" id="thresholdN" min="1" value="" placeholder="默认=消息总数">
+      </div>
+      <div class="field field-inline">
+        <label for="thresholdMode">匹配模式</label>
+        <select id="thresholdMode">
+          <option value="gte">N 个及以上</option>
+          <option value="eq">恰好 N 个消息</option>
+        </select>
+      </div>
     </div>
 
     <!-- 操作按钮 -->
@@ -39,6 +54,8 @@
     const tokenInput = createTokenInput(document.getElementById('tokenArea'));
 
     const linksInput = document.getElementById('linksInput');
+    const thresholdN = document.getElementById('thresholdN');
+    const thresholdMode = document.getElementById('thresholdMode');
     const startBtn = document.getElementById('startBtn');
     const progressEl = document.getElementById('progress');
     const resultEl = document.getElementById('result');
@@ -58,9 +75,10 @@
 
     /**
      * 获取某条消息上所有反应用户的完整集合（自动分页）
+     * @param {Function} onProgress - 分页进度回调，接收已拉取的用户数
      * @returns {Set<string>} 用户ID集合
      */
-    async function getReactionUsers(token, channelId, messageId) {
+    async function getReactionUsers(token, channelId, messageId, onProgress) {
       const userSet = new Set();
 
       // 第一步：获取消息对象，看它有哪些 reaction
@@ -95,6 +113,9 @@
           for (const u of users) {
             userSet.add(u.id);
           }
+
+          // 通知外部当前分页进度
+          if (onProgress) onProgress(userSet.size);
 
           // 如果返回不足 100 个，说明已经取完
           if (users.length < 100) break;
@@ -132,41 +153,73 @@
         return;
       }
 
+      const totalMessages = parsed.length;
+
+      // 阈值校验：N 不能小于 1，不能大于消息总数
+      const nVal = thresholdN.value.trim();
+      const N = nVal === '' ? totalMessages : parseInt(nVal, 10);
+      if (isNaN(N) || N < 1) {
+        resultEl.textContent = '阈值 N 不能小于 1';
+        resultEl.className = 'result error';
+        return;
+      }
+      if (N > totalMessages) {
+        resultEl.textContent = '阈值 N（' + N + '）不能大于消息总数（' + totalMessages + '）';
+        resultEl.className = 'result error';
+        return;
+      }
+
+      const mode = thresholdMode.value; // "gte" 或 "eq"
+
       // 开始分析
       startBtn.disabled = true;
       resultEl.textContent = '';
       resultEl.className = 'result';
 
       try {
-        const sets = [];
+        // 用 Map 记录每个用户在多少条消息里反应过
+        const userCount = new Map();
 
         // 逐条消息获取反应用户
-        for (let i = 0; i < parsed.length; i++) {
-          progressEl.textContent = '正在获取第 ' + (i + 1) + '/' + parsed.length + ' 条消息的反应用户...';
+        for (let i = 0; i < totalMessages; i++) {
+          const msgIndex = i + 1;
+          progressEl.textContent = '正在处理第 ' + msgIndex + ' / ' + totalMessages + ' 条消息...';
+
           const { channelId, messageId } = parsed[i];
-          const users = await getReactionUsers(token, channelId, messageId);
-          sets.push(users);
+
+          // 传入分页进度回调，实时更新进度文字
+          const users = await getReactionUsers(token, channelId, messageId, (count) => {
+            progressEl.textContent = '第 ' + msgIndex + ' / ' + totalMessages + ' 条消息：已拉取 ' + count + ' 个反应用户...';
+          });
+
+          // 统计每个用户出现的次数
+          for (const uid of users) {
+            userCount.set(uid, (userCount.get(uid) || 0) + 1);
+          }
         }
 
-        progressEl.textContent = '正在计算交集...';
+        progressEl.textContent = '正在筛选符合条件的用户...';
 
-        // 求所有集合的交集
-        let intersection = sets[0];
-        for (let i = 1; i < sets.length; i++) {
-          intersection = new Set([...intersection].filter(id => sets[i].has(id)));
+        // 根据阈值和模式筛选
+        const matched = [];
+        for (const [uid, count] of userCount) {
+          if (mode === 'gte' && count >= N) {
+            matched.push(uid);
+          } else if (mode === 'eq' && count === N) {
+            matched.push(uid);
+          }
         }
 
         // 展示结果
-        if (intersection.size === 0) {
-          resultEl.textContent = '没有找到同时对所有消息都点过反应的用户。';
+        if (matched.length === 0) {
+          const modeText = mode === 'gte' ? '在 ' + N + ' 个及以上消息' : '恰好在 ' + N + ' 个消息';
+          resultEl.textContent = '没有找到' + modeText + '点过反应的用户。';
           resultEl.className = 'result';
         } else {
-          // 为了显示用户名，需要从 API 获取用户信息
-          // 这里我们只展示用户ID（获取用户名需要额外请求，暂不实现）
-          const ids = [...intersection];
-          let html = '<strong>交集用户（' + ids.length + ' 人）：</strong><br><br>';
+          const modeText = mode === 'gte' ? '≥ ' + N + ' 条消息' : '恰好 ' + N + ' 条消息';
+          let html = '<strong>符合条件的用户（' + matched.length + ' 人，' + modeText + '）：</strong><br><br>';
           html += '<div class="user-list">';
-          for (const id of ids) {
+          for (const id of matched) {
             html += '<div class="user-item">' + id + '</div>';
           }
           html += '</div>';
@@ -176,7 +229,7 @@
 
           // 绑定复制按钮
           document.getElementById('copyBtn').addEventListener('click', () => {
-            navigator.clipboard.writeText(ids.join('\n'));
+            navigator.clipboard.writeText(matched.join('\n'));
             document.getElementById('copyBtn').textContent = '已复制 ✅';
           });
         }

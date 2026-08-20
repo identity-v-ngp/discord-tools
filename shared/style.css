@@ -152,3 +152,25 @@ h1 {
   font-size: 13px;
   border-bottom: 1px solid #f0f0f0;
 }
+
+/* 阈值设置行（横向排列） */
+.threshold-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.field-inline {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.field-inline input,
+.field-inline select {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid #dcdfe6;
+  border-radius: 6px;
+  font-family: inherit;
+}
