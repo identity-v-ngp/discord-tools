@@ -348,32 +348,59 @@
           progressEl.textContent = '第3步：正在处理第 ' + (i + 1) + ' / ' + threads.length + ' 个帖子...';
 
           try {
+            // ===== 诊断日志：打印 thread 信息 =====
+            console.log('[F1 诊断] 处理帖子 - threadID:', thread.id, ', 名称:', thread.name);
+
             // 获取首楼消息（thread 的 starter message）
-            // Discord API: GET /channels/{channel.id}/messages/{message.id}
-            // thread.id 就是首楼消息的 id
-            const starterMsg = await callDiscord(token, 'GET',
-              '/channels/' + thread.parent_id + '/messages/' + thread.id);
+            // ✅ 正确做法：在 thread 内部查，channelID 和 messageID 都放 threadID
+            // ❌ 错误做法：用 thread.parent_id（论坛父频道ID）会报 10008
+            let starterMsg;
+            const starterPath = '/channels/' + thread.id + '/messages/' + thread.id;
+            console.log('[F1 诊断] 请求首楼消息 - 完整路径:', starterPath);
+            console.log('[F1 诊断] 请求首楼消息 - 后端将请求: https://discord.com/api/v10' + starterPath);
+
+            try {
+              // 方法1：直接获取首楼消息（thread.id == starter message id）
+              starterMsg = await callDiscord(token, 'GET', starterPath);
+            } catch (err) {
+              console.warn('[F1 诊断] 方法1获取首楼消息失败，尝试方法2:', err);
+              // 方法2（兜底）：获取 thread 里最早的一条消息
+              const fallbackPath = '/channels/' + thread.id + '/messages?limit=1';
+              console.log('[F1 诊断] 兜底请求 - 完整路径:', fallbackPath);
+              const messages = await callDiscord(token, 'GET', fallbackPath);
+              if (messages && messages.length > 0) {
+                starterMsg = messages[0];
+                console.log('[F1 诊断] 兜底成功，获取到首楼消息');
+              } else {
+                throw err; // 两种方法都失败，抛出原始错误
+              }
+            }
+
+            // ===== 诊断日志：打印首楼消息信息 =====
+            const authorId = starterMsg.author ? starterMsg.author.id : '未知';
+            const totalReactions = calculateTotalReactions(starterMsg);
+            console.log('[F1 诊断] 首楼消息 - 作者ID:', authorId, ', 反应总数:', totalReactions);
 
             // 检查首楼作者是否是获奖用户
             if (firstPrizeId && starterMsg.author && starterMsg.author.id === firstPrizeId) {
-              const totalReactions = calculateTotalReactions(starterMsg);
               firstPrizeThreads.push({
                 thread: thread,
                 message: starterMsg,
                 totalReactions: totalReactions
               });
+              console.log('[F1 诊断] ✅ 匹配到一等奖用户的帖子，反应数:', totalReactions);
             }
 
             if (secondPrizeId && starterMsg.author && starterMsg.author.id === secondPrizeId) {
-              const totalReactions = calculateTotalReactions(starterMsg);
               secondPrizeThreads.push({
                 thread: thread,
                 message: starterMsg,
                 totalReactions: totalReactions
               });
+              console.log('[F1 诊断] ✅ 匹配到二等奖用户的帖子，反应数:', totalReactions);
             }
           } catch (err) {
-            console.warn('处理帖子 ' + thread.id + ' 失败:', err);
+            console.warn('[F1 诊断] 处理帖子 ' + thread.id + ' 失败:', err);
             // 跳过失败的帖子，继续处理
           }
         }
@@ -418,6 +445,10 @@
           totalReactions: bestSecondPrize.totalReactions,
           imageUrl: extractFirstImage(bestSecondPrize.message)
         } : null;
+
+        // ===== 诊断日志：打印图片提取结果 =====
+        console.log('[F1 诊断] 一等奖帖子图片URL:', firstPrizeResult ? firstPrizeResult.imageUrl : '无帖子');
+        console.log('[F1 诊断] 二等奖帖子图片URL:', secondPrizeResult ? secondPrizeResult.imageUrl : '无帖子');
 
         let step4Text = '第4步完成：';
         if (firstPrizeResult) {
