@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>F1 - 画作归档</title>
+  <link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+
+  <div class="container">
+    <h1>F1 · 画作归档</h1>
+    <p class="desc">从论坛频道提取获奖作品并归档到指定频道</p>
+
+    <!-- token 输入区（由 core.js 动态生成） -->
+    <div id="tokenArea"></div>
+
+    <!-- 公告消息链接 -->
+    <div class="field">
+      <label for="announceLink">公告消息链接</label>
+      <input type="text" id="announceLink"
+        placeholder="https://discord.com/channels/服务器ID/频道ID/消息ID">
+    </div>
+
+    <!-- 论坛频道ID -->
+    <div class="field">
+      <label for="forumChannelId">论坛频道 ID（爬取反应的频道）</label>
+      <input type="text" id="forumChannelId" placeholder="输入论坛频道的 ID">
+    </div>
+
+    <!-- 目标频道ID -->
+    <div class="field">
+      <label for="targetChannelId">目标频道 ID（发送归档消息的频道）</label>
+      <input type="text" id="targetChannelId" placeholder="输入目标频道的 ID">
+    </div>
+
+    <!-- 操作按钮 -->
+    <button class="btn" id="startBtn">开始归档</button>
+
+    <!-- 进度提示 -->
+    <div class="progress" id="progress"></div>
+
+    <!-- 结果显示区 -->
+    <div class="result" id="result"></div>
+  </div>
+
+  <script type="module">
+    // 从 core.js 引入共用函数和常量
+    import { createTokenInput, callDiscord, sleep, REQUEST_DELAY_MS } from '/shared/core.js';
+
+    // 初始化 token 输入框
+    const tokenInput = createTokenInput(document.getElementById('tokenArea'));
+
+    const announceLinkInput = document.getElementById('announceLink');
+    const forumChannelIdInput = document.getElementById('forumChannelId');
+    const targetChannelIdInput = document.getElementById('targetChannelId');
+    const startBtn = document.getElementById('startBtn');
+    const progressEl = document.getElementById('progress');
+    const resultEl = document.getElementById('result');
+
+    /**
+     * 从 Discord 消息链接中提取 频道ID 和 消息ID
+     * 链接格式：https://discord.com/channels/服务器ID/频道ID/消息ID
+     */
+    function parseLink(link) {
+      const parts = link.trim().split('/');
+      const messageId = parts[parts.length - 1];
+      const channelId = parts[parts.length - 2];
+      if (!channelId || !messageId) return null;
+      return { channelId, messageId };
+    }
+
+    /**
+     * 从公告消息正文中提取 First Prize 和 Second Prize 的用户ID
+     * 严格使用 <@!?(\d+)> 正则，避免误匹配自定义表情 <:name:id> 或 <a:name:id>
+     */
+    function extractWinnerIds(content) {
+      // 严格正则：只匹配 <@数字> 或 <@!数字>，不匹配 <:xxx:数字> 或 <a:xxx:数字>
+      const mentionRegex = /<@!?(\d+)>/g;
+
+      // 找 First Prize 之后的第一个提及
+      const firstPrizeIndex = content.indexOf('First Prize');
+      let firstPrizeId = null;
+      if (firstPrizeIndex !== -1) {
+        const afterFirstPrize = content.substring(firstPrizeIndex);
+        const match = mentionRegex.exec(afterFirstPrize);
+        if (match) {
+          firstPrizeId = match[1];
+        }
+      }
+
+      // 重置正则的 lastIndex
+      mentionRegex.lastIndex = 0;
+
+      // 找 Second Prize 之后的第一个提及
+      const secondPrizeIndex = content.indexOf('Second Prize');
+      let secondPrizeId = null;
+      if (secondPrizeIndex !== -1) {
+        const afterSecondPrize = content.substring(secondPrizeIndex);
+        const match = mentionRegex.exec(afterSecondPrize);
+        if (match) {
+          secondPrizeId = match[1];
+        }
+      }
+
+      return { firstPrizeId, secondPrizeId };
+    }
+
+    /**
+     * 获取论坛频道下的所有线程（包括活跃和已归档的）
+     */
+    async function getAllThreads(token, forumChannelId, onProgress) {
+      const threads = [];
+
+      // 1. 获取活跃线程
+      try {
+        if (onProgress) onProgress('正在获取活跃线程...');
+        const activeData = await callDiscord(token, 'GET',
+          '/channels/' + forumChannelId + '/threads/active');
+        if (activeData.threads) {
+          threads.push(...activeData.threads);
+        }
+      } catch (err) {
+        console.warn('获取活跃线程失败:', err);
+      }
+
+      // 2. 获取已归档线程（公开归档）
+      try {
+        if (onProgress) onProgress('正在获取已归档线程...');
+        let before = null;
+        let hasMore = true;
+
+        // 分页获取，每次最多100条
+        while (hasMore) {
+          let query = '/channels/' + forumChannelId + '/threads/archived/public?limit=100';
+          if (before) query += '&before=' + before;
+
+          const archivedData = await callDiscord(token, 'GET', query);
+          if (archivedData.threads && archivedData.threads.length > 0) {
+            threads.push(...archivedData.threads);
+            if (onProgress) onProgress('已获取 ' + threads.length + ' 个线程...');
+          }
+
+          // 检查是否还有更多
+          if (archivedData.has_more && archivedData.threads && archivedData.threads.length > 0) {
+            // 用最后一个线程的 thread_metadata.archive_timestamp 作为分页游标
+            const lastThread = archivedData.threads[archivedData.threads.length - 1];
+            before = lastThread.thread_metadata?.archive_timestamp;
+            if (!before) hasMore = false;
+          } else {
+            hasMore = false;
+          }
+        }
+      } catch (err) {
+        console.warn('获取已归档线程失败:', err);
+      }
+
+      return threads;
+    }
+
+    /**
+     * 计算消息的总反应数（所有 emoji 的 count 加总）
+     */
+    function calculateTotalReactions(message) {
+      if (!message.reactions || message.reactions.length === 0) {
+        return 0;
+      }
+      return message.reactions.reduce((sum, r) => sum + (r.count || 0), 0);
+    }
+
+    /**
+     * 从消息中提取第一张图片的 URL
+     * 优先级：附件图片 > embed 图片
+     */
+    function extractFirstImage(message) {
+      // 1. 优先从 attachments 找图片
+      if (message.attachments && message.attachments.length > 0) {
+        for (const att of message.attachments) {
+          // content_type 可能是 'image/png', 'image/jpeg' 等
+          if (att.content_type && att.content_type.startsWith('image/')) {
+            return att.url;
+          }
+        }
+      }
+
+      // 2. 从 embeds 找图片
+      if (message.embeds && message.embeds.length > 0) {
+        for (const embed of message.embeds) {
+          // 优先取 image.url
+          if (embed.image && embed.image.url) {
+            return embed.image.url;
+          }
+          // 其次取 thumbnail.url
+          if (embed.thumbnail && embed.thumbnail.url) {
+            return embed.thumbnail.url;
+          }
+        }
+      }
+
+      return null;
+    }
+
+    /**
+     * 发送归档消息到目标频道
+     */
+    async function sendArchiveMessage(token, targetChannelId, firstPrize, secondPrize) {
+      const embeds = [];
+
+      // 一等奖 embed
+      if (firstPrize) {
+        embeds.push({
+          title: '🥇 一等奖作品',
+          description: '作者：<@' + firstPrize.authorId + '>\n反应数：' + firstPrize.totalReactions,
+          image: firstPrize.imageUrl ? { url: firstPrize.imageUrl } : undefined,
+          color: 0xFFD700 // 金色
+        });
+      }
+
+      // 二等奖 embed
+      if (secondPrize) {
+        embeds.push({
+          title: '🥈 二等奖作品',
+          description: '作者：<@' + secondPrize.authorId + '>\n反应数：' + secondPrize.totalReactions,
+          image: secondPrize.imageUrl ? { url: secondPrize.imageUrl } : undefined,
+          color: 0xC0C0C0 // 银色
+        });
+      }
+
+      const body = {
+        content: '🎨 **画作归档** 🎨\n恭喜以下获奖者！',
+        embeds: embeds
+      };
+
+      return await callDiscord(token, 'POST',
+        '/channels/' + targetChannelId + '/messages', body);
+    }
+
+    // 点击"开始归档"按钮
+    startBtn.addEventListener('click', async () => {
+      const token = tokenInput.value.trim();
+      const announceLink = announceLinkInput.value.trim();
+      const forumChannelId = forumChannelIdInput.value.trim();
+      const targetChannelId = targetChannelIdInput.value.trim();
+
+      // 基本校验
+      if (!token) {
+        resultEl.textContent = '请先输入 Bot Token';
+        resultEl.className = 'result error';
+        return;
+      }
+      if (!announceLink) {
+        resultEl.textContent = '请输入公告消息链接';
+        resultEl.className = 'result error';
+        return;
+      }
+      if (!forumChannelId) {
+        resultEl.textContent = '请输入论坛频道 ID';
+        resultEl.className = 'result error';
+        return;
+      }
+      if (!targetChannelId) {
+        resultEl.textContent = '请输入目标频道 ID';
+        resultEl.className = 'result error';
+        return;
+      }
+
+      // 解析公告链接
+      const parsed = parseLink(announceLink);
+      if (!parsed) {
+        resultEl.textContent = '公告消息链接格式不正确';
+        resultEl.className = 'result error';
+        return;
+      }
+
+      // 开始归档
+      startBtn.disabled = true;
+      resultEl.textContent = '';
+      resultEl.className = 'result';
+
+      try {
+        // ========== 第1步：解析公告，提取获奖用户ID ==========
+        progressEl.textContent = '第1步：正在获取公告消息...';
+        const announceMsg = await callDiscord(token, 'GET',
+          '/channels/' + parsed.channelId + '/messages/' + parsed.messageId);
+
+        const { firstPrizeId, secondPrizeId } = extractWinnerIds(announceMsg.content || '');
+
+        if (!firstPrizeId && !secondPrizeId) {
+          resultEl.textContent = '未在公告中匹配到 First Prize 或 Second Prize 的用户ID，请检查公告内容格式。';
+          resultEl.className = 'result error';
+          return;
+        }
+
+        let progressText = '第1步完成：';
+        if (firstPrizeId) progressText += '一等奖ID=' + firstPrizeId + ' ';
+        if (secondPrizeId) progressText += '二等奖ID=' + secondPrizeId;
+        progressEl.textContent = progressText;
+
+        // ========== 第2步：爬取论坛频道的所有帖子 ==========
+        progressEl.textContent = '第2步：正在爬取论坛频道的所有帖子...';
+        const threads = await getAllThreads(token, forumChannelId, (msg) => {
+          progressEl.textContent = '第2步：' + msg;
+        });
+
+        if (threads.length === 0) {
+          resultEl.textContent = '论坛频道中没有找到任何帖子。';
+          resultEl.className = 'result error';
+          return;
+        }
+
+        progressEl.textContent = '第2步完成：共获取 ' + threads.length + ' 个帖子';
+
+        // ========== 第3步：找出两个用户各自反应最多的帖子 ==========
+        progressEl.textContent = '第3步：正在分析每个帖子的首楼消息和反应数...';
+
+        const firstPrizeThreads = []; // 一等奖用户的帖子
+        const secondPrizeThreads = []; // 二等奖用户的帖子
+
+        for (let i = 0; i < threads.length; i++) {
+          const thread = threads[i];
+          progressEl.textContent = '第3步：正在处理第 ' + (i + 1) + ' / ' + threads.length + ' 个帖子...';
+
+          try {
+            // 获取首楼消息（thread 的 starter message）
+            // Discord API: GET /channels/{channel.id}/messages/{message.id}
+            // thread.id 就是首楼消息的 id
+            const starterMsg = await callDiscord(token, 'GET',
+              '/channels/' + thread.parent_id + '/messages/' + thread.id);
+
+            // 检查首楼作者是否是获奖用户
+            if (firstPrizeId && starterMsg.author && starterMsg.author.id === firstPrizeId) {
+              const totalReactions = calculateTotalReactions(starterMsg);
+              firstPrizeThreads.push({
+                thread: thread,
+                message: starterMsg,
+                totalReactions: totalReactions
+              });
+            }
+
+            if (secondPrizeId && starterMsg.author && starterMsg.author.id === secondPrizeId) {
+              const totalReactions = calculateTotalReactions(starterMsg);
+              secondPrizeThreads.push({
+                thread: thread,
+                message: starterMsg,
+                totalReactions: totalReactions
+              });
+            }
+          } catch (err) {
+            console.warn('处理帖子 ' + thread.id + ' 失败:', err);
+            // 跳过失败的帖子，继续处理
+          }
+        }
+
+        // 找出反应数最高的帖子
+        let bestFirstPrize = null;
+        if (firstPrizeThreads.length > 0) {
+          bestFirstPrize = firstPrizeThreads.reduce((best, curr) =>
+            curr.totalReactions > best.totalReactions ? curr : best
+          );
+        }
+
+        let bestSecondPrize = null;
+        if (secondPrizeThreads.length > 0) {
+          bestSecondPrize = secondPrizeThreads.reduce((best, curr) =>
+            curr.totalReactions > best.totalReactions ? curr : best
+          );
+        }
+
+        let step3Text = '第3步完成：';
+        if (firstPrizeId) {
+          step3Text += '一等奖找到 ' + firstPrizeThreads.length + ' 个帖子';
+          if (bestFirstPrize) step3Text += '（最高反应数=' + bestFirstPrize.totalReactions + '）';
+        }
+        if (secondPrizeId) {
+          step3Text += '，二等奖找到 ' + secondPrizeThreads.length + ' 个帖子';
+          if (bestSecondPrize) step3Text += '（最高反应数=' + bestSecondPrize.totalReactions + '）';
+        }
+        progressEl.textContent = step3Text;
+
+        // ========== 第4步：提取每帖的第一张图片 ==========
+        progressEl.textContent = '第4步：正在提取图片...';
+
+        const firstPrizeResult = bestFirstPrize ? {
+          authorId: firstPrizeId,
+          totalReactions: bestFirstPrize.totalReactions,
+          imageUrl: extractFirstImage(bestFirstPrize.message)
+        } : null;
+
+        const secondPrizeResult = bestSecondPrize ? {
+          authorId: secondPrizeId,
+          totalReactions: bestSecondPrize.totalReactions,
+          imageUrl: extractFirstImage(bestSecondPrize.message)
+        } : null;
+
+        let step4Text = '第4步完成：';
+        if (firstPrizeResult) {
+          step4Text += '一等奖图片=' + (firstPrizeResult.imageUrl ? '已找到' : '未找到');
+        }
+        if (secondPrizeResult) {
+          step4Text += '，二等奖图片=' + (secondPrizeResult.imageUrl ? '已找到' : '未找到');
+        }
+        progressEl.textContent = step4Text;
+
+        // ========== 第5步：发送归档消息到目标频道 ==========
+        progressEl.textContent = '第5步：正在发送归档消息到目标频道...';
+
+        try {
+          const sentMsg = await sendArchiveMessage(token, targetChannelId,
+            firstPrizeResult, secondPrizeResult);
+
+          progressEl.textContent = '第5步完成：归档消息已发送';
+
+          // 显示最终结果
+          let resultText = '✅ 归档完成！\n\n';
+          resultText += '归档消息链接：https://discord.com/channels/' +
+            (announceMsg.guild_id || '服务器ID') + '/' + targetChannelId + '/' + sentMsg.id + '\n\n';
+
+          if (firstPrizeResult) {
+            resultText += '🥇 一等奖：<@' + firstPrizeResult.authorId + '>\n';
+            resultText += '   反应数：' + firstPrizeResult.totalReactions + '\n';
+            resultText += '   图片：' + (firstPrizeResult.imageUrl || '未找到') + '\n\n';
+          } else if (firstPrizeId) {
+            resultText += '🥇 一等奖：<@' + firstPrizeId + '> - 未找到该用户的帖子\n\n';
+          }
+
+          if (secondPrizeResult) {
+            resultText += '🥈 二等奖：<@' + secondPrizeResult.authorId + '>\n';
+            resultText += '   反应数：' + secondPrizeResult.totalReactions + '\n';
+            resultText += '   图片：' + (secondPrizeResult.imageUrl || '未找到') + '\n';
+          } else if (secondPrizeId) {
+            resultText += '🥈 二等奖：<@' + secondPrizeId + '> - 未找到该用户的帖子\n';
+          }
+
+          resultEl.textContent = resultText;
+          resultEl.className = 'result success';
+
+        } catch (err) {
+          // 检查是否是权限错误
+          const errMsg = err.message || '';
+          if (errMsg.includes('50013') || errMsg.includes('50001') || errMsg.includes('Missing Permissions')) {
+            resultEl.textContent = '❌ Bot 在目标频道缺少发送消息的权限，请检查 bot 的角色权限设置。';
+          } else {
+            resultEl.textContent = '❌ 发送归档消息失败：' + errMsg;
+          }
+          resultEl.className = 'result error';
+        }
+
+      } catch (err) {
+        resultEl.textContent = '归档失败：' + err.message;
+        resultEl.className = 'result error';
+      } finally {
+        startBtn.disabled = false;
+        progressEl.textContent = '';
+      }
+    });
+  </script>
+
+</body>
+</html>
