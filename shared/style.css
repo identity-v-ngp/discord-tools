@@ -194,3 +194,18 @@ h1 {
   border-radius: 6px;
   font-family: inherit;
 }
+
+/* 警告状态色（部分请求失败时使用） */
+.result.warn {
+  border-color: #f39c12;
+  color: #d35400;
+  background: #fef9e7;
+}
+
+/* 失败记录条目 */
+.fail-item {
+  padding: 4px 0;
+  font-size: 12px;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  border-bottom: 1px solid #f0f0f0;
+}

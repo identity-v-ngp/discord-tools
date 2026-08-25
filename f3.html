@@ -48,7 +48,8 @@
   </div>
 
   <script type="module">
-    import { createTokenInput, callDiscord } from '/shared/core.js';
+    // 从 core.js 引入共用函数和可调常量
+    import { createTokenInput, callDiscord, sleep, REQUEST_DELAY_MS, MAX_RETRIES } from '/shared/core.js';
 
     // 初始化 token 输入框
     const tokenInput = createTokenInput(document.getElementById('tokenArea'));
@@ -63,6 +64,9 @@
     // 用户信息缓存：key=用户ID，value={name, avatar}
     // 拉取 reaction 用户时顺便存入，展示结果时直接读取，避免额外请求
     const userCache = new Map();
+
+    // 记录拉取失败的部分（容错用，最终展示给用户看）
+    const failures = [];
 
     /**
      * 从 Discord 消息链接中提取 频道ID 和 消息ID
@@ -79,21 +83,40 @@
 
     /**
      * 获取某条消息上所有反应用户的完整集合（自动分页）
-     * @param {Function} onProgress - 分页进度回调，接收已拉取的用户数
-     * @returns {Set<string>} 用户ID集合
+     * 失败时不抛异常，而是记录到 failures 数组并返回已拉到的部分数据
+     *
+     * @param {string} token - Bot Token
+     * @param {string} channelId - 频道ID
+     * @param {string} messageId - 消息ID
+     * @param {Function} onProgress - 进度回调 (已拉取用户数, 重试信息或null)
+     * @returns {Set<string>} 用户ID集合（可能不完整）
      */
     async function getReactionUsers(token, channelId, messageId, onProgress) {
       const userSet = new Set();
 
       // 第一步：获取消息对象，看它有哪些 reaction
-      const msg = await callDiscord(token, 'GET',
-        '/channels/' + channelId + '/messages/' + messageId);
+      let msg;
+      try {
+        msg = await callDiscord(token, 'GET',
+          '/channels/' + channelId + '/messages/' + messageId,
+          null,
+          // 重试回调：通知外部正在重试
+          (attempt, waitSec) => {
+            if (onProgress) onProgress(userSet.size,
+              '获取消息对象重试第 ' + attempt + ' 次，等待 ' + waitSec + ' 秒...');
+          }
+        );
+      } catch (err) {
+        // 获取消息本身就失败了，记录并返回空集合
+        failures.push('消息 ' + messageId + '：获取消息对象失败 - ' + err.message);
+        return userSet;
+      }
 
       if (!msg.reactions || msg.reactions.length === 0) {
         return userSet; // 这条消息没有任何反应
       }
 
-      // 第二步：逐个表情拉取所有点过的用户
+      // 第二步：逐个表情拉取所有点过的用户（串行：一个表情完成再拉下一个）
       for (const reaction of msg.reactions) {
         // emoji 可能是 Unicode 或自定义表情（name:id 格式）
         // 自定义表情需要 URL 编码，Unicode 表情也需要编码
@@ -109,7 +132,21 @@
             + '/reactions/' + emojiStr + '?limit=100';
           if (after) query += '&after=' + after;
 
-          const users = await callDiscord(token, 'GET', query);
+          let users;
+          try {
+            users = await callDiscord(token, 'GET', query,
+              null,
+              // 重试回调
+              (attempt, waitSec) => {
+                if (onProgress) onProgress(userSet.size,
+                  '分页请求重试第 ' + attempt + ' 次，等待 ' + waitSec + ' 秒...');
+              }
+            );
+          } catch (err) {
+            // 分页请求最终失败，记录并跳过当前表情的后续分页
+            failures.push('消息 ' + messageId + ' 表情 ' + reaction.emoji.name + '：分页拉取失败 - ' + err.message);
+            break;
+          }
 
           if (!users || users.length === 0) break;
 
@@ -128,7 +165,7 @@
           }
 
           // 通知外部当前分页进度
-          if (onProgress) onProgress(userSet.size);
+          if (onProgress) onProgress(userSet.size, null);
 
           // 如果返回不足 100 个，说明已经取完
           if (users.length < 100) break;
@@ -188,21 +225,28 @@
       startBtn.disabled = true;
       resultEl.textContent = '';
       resultEl.className = 'result';
+      failures.length = 0; // 清空上次的失败记录
+
+      // 移除上次的警告区（如果有）
+      const oldWarn = document.querySelector('.result.warn');
+      if (oldWarn) oldWarn.remove();
 
       try {
         // 用 Map 记录每个用户在多少条消息里反应过
         const userCount = new Map();
 
-        // 逐条消息获取反应用户
+        // 逐条消息获取反应用户（串行：一条完成再处理下一条）
         for (let i = 0; i < totalMessages; i++) {
           const msgIndex = i + 1;
           progressEl.textContent = '正在处理第 ' + msgIndex + ' / ' + totalMessages + ' 条消息...';
 
           const { channelId, messageId } = parsed[i];
 
-          // 传入分页进度回调，实时更新进度文字
-          const users = await getReactionUsers(token, channelId, messageId, (count) => {
-            progressEl.textContent = '第 ' + msgIndex + ' / ' + totalMessages + ' 条消息：已拉取 ' + count + ' 个反应用户...';
+          // 传入分页进度回调，实时更新进度文字（含重试信息）
+          const users = await getReactionUsers(token, channelId, messageId, (count, retryInfo) => {
+            let text = '第 ' + msgIndex + ' / ' + totalMessages + ' 条消息：已拉取 ' + count + ' 个反应用户';
+            if (retryInfo) text += '（' + retryInfo + '）';
+            progressEl.textContent = text;
           });
 
           // 统计每个用户出现的次数
@@ -252,6 +296,19 @@
             document.getElementById('copyBtn').textContent = '已复制 ✅';
           });
         }
+
+        // 如果有失败记录，在结果下方追加警告（不中断整体流程）
+        if (failures.length > 0) {
+          const warnEl = document.createElement('div');
+          warnEl.className = 'result warn';
+          let warnHtml = '<strong>⚠ 以下 ' + failures.length + ' 个请求未能成功（结果可能不完整）：</strong><br><br>';
+          for (const f of failures) {
+            warnHtml += '<div class="fail-item">' + f + '</div>';
+          }
+          warnEl.innerHTML = warnHtml;
+          resultEl.parentNode.insertBefore(warnEl, resultEl.nextSibling);
+        }
+
       } catch (err) {
         resultEl.textContent = '分析失败：' + err.message;
         resultEl.className = 'result error';
