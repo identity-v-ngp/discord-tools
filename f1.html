@@ -59,15 +59,16 @@
     const resultEl = document.getElementById('result');
 
     /**
-     * 从 Discord 消息链接中提取 频道ID 和 消息ID
+     * 从 Discord 消息链接中提取 服务器ID、频道ID 和 消息ID
      * 链接格式：https://discord.com/channels/服务器ID/频道ID/消息ID
      */
     function parseLink(link) {
       const parts = link.trim().split('/');
       const messageId = parts[parts.length - 1];
       const channelId = parts[parts.length - 2];
-      if (!channelId || !messageId) return null;
-      return { channelId, messageId };
+      const guildId = parts[parts.length - 3];
+      if (!guildId || !channelId || !messageId) return null;
+      return { guildId, channelId, messageId };
     }
 
     /**
@@ -108,36 +109,50 @@
 
     /**
      * 获取论坛频道下的所有线程（包括活跃和已归档的）
+     * @param {string} guildId - 服务器ID（用于获取活跃线程）
+     * @param {string} forumChannelId - 论坛频道ID（用于筛选和获取归档线程）
      */
-    async function getAllThreads(token, forumChannelId, onProgress) {
+    async function getAllThreads(token, guildId, forumChannelId, onProgress) {
       const threads = [];
 
-      // 1. 获取活跃线程
+      // 1. 获取活跃线程（使用服务器级别的端点）
       try {
         if (onProgress) onProgress('正在获取活跃线程...');
-        const activeData = await callDiscord(token, 'GET',
-          '/channels/' + forumChannelId + '/threads/active');
+        const activeUrl = '/guilds/' + guildId + '/threads/active';
+        console.log('[F1] 请求活跃线程:', activeUrl);
+        
+        const activeData = await callDiscord(token, 'GET', activeUrl);
+        console.log('[F1] 活跃线程响应:', activeData);
+        
         if (activeData.threads) {
-          threads.push(...activeData.threads);
+          // 筛选出属于目标论坛频道的线程
+          const forumActiveThreads = activeData.threads.filter(t => t.parent_id === forumChannelId);
+          console.log('[F1] 活跃线程总数:', activeData.threads.length, '，属于论坛的:', forumActiveThreads.length);
+          threads.push(...forumActiveThreads);
         }
       } catch (err) {
-        console.warn('获取活跃线程失败:', err);
+        console.warn('[F1] 获取活跃线程失败:', err);
       }
 
-      // 2. 获取已归档线程（公开归档）
+      // 2. 获取已归档线程（使用频道级别的端点）
       try {
         if (onProgress) onProgress('正在获取已归档线程...');
         let before = null;
         let hasMore = true;
+        let archivedCount = 0;
 
         // 分页获取，每次最多100条
         while (hasMore) {
           let query = '/channels/' + forumChannelId + '/threads/archived/public?limit=100';
           if (before) query += '&before=' + before;
-
+          
+          console.log('[F1] 请求归档线程:', query);
           const archivedData = await callDiscord(token, 'GET', query);
+          console.log('[F1] 归档线程响应:', archivedData);
+          
           if (archivedData.threads && archivedData.threads.length > 0) {
             threads.push(...archivedData.threads);
+            archivedCount += archivedData.threads.length;
             if (onProgress) onProgress('已获取 ' + threads.length + ' 个线程...');
           }
 
@@ -152,9 +167,10 @@
           }
         }
       } catch (err) {
-        console.warn('获取已归档线程失败:', err);
+        console.warn('[F1] 获取已归档线程失败:', err);
       }
 
+      console.log('[F1] 合并后线程总数:', threads.length);
       return threads;
     }
 
@@ -298,7 +314,7 @@
 
         // ========== 第2步：爬取论坛频道的所有帖子 ==========
         progressEl.textContent = '第2步：正在爬取论坛频道的所有帖子...';
-        const threads = await getAllThreads(token, forumChannelId, (msg) => {
+        const threads = await getAllThreads(token, parsed.guildId, forumChannelId, (msg) => {
           progressEl.textContent = '第2步：' + msg;
         });
 
