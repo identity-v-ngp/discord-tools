@@ -229,15 +229,16 @@
 
     /**
      * 发送归档消息到目标频道
+     * @param {string} announceContent - 公告消息原文 content，用于提取消息头
      */
-    async function sendArchiveMessage(token, targetChannelId, firstPrize, secondPrize) {
+    async function sendArchiveMessage(token, targetChannelId, firstPrize, secondPrize, announceContent) {
       const embeds = [];
 
       // 一等奖 embed
       if (firstPrize) {
         embeds.push({
-          title: '🥇 一等奖作品',
-          description: '作者：<@' + firstPrize.authorId + '>\n反应数：' + firstPrize.totalReactions,
+          title: '🥇 1st Place',
+          description: 'Author: <@' + firstPrize.authorId + '>',
           image: firstPrize.imageUrl ? { url: firstPrize.imageUrl } : undefined,
           color: 0xFFD700 // 金色
         });
@@ -246,15 +247,22 @@
       // 二等奖 embed
       if (secondPrize) {
         embeds.push({
-          title: '🥈 二等奖作品',
-          description: '作者：<@' + secondPrize.authorId + '>\n反应数：' + secondPrize.totalReactions,
+          title: '🥈 2nd Place',
+          description: 'Author: <@' + secondPrize.authorId + '>',
           image: secondPrize.imageUrl ? { url: secondPrize.imageUrl } : undefined,
           color: 0xC0C0C0 // 银色
         });
       }
 
+      // 从公告原文提取前3行非空文本作为消息头
+      const headerLines = (announceContent || '')
+        .split('\n')
+        .filter(line => line.trim() !== '')
+        .slice(0, 3);
+      const headerText = headerLines.join('\n');
+
       const body = {
-        content: '🎨 **画作归档** 🎨\n恭喜以下获奖者！',
+        content: headerText,
         embeds: embeds
       };
 
@@ -464,7 +472,7 @@
 
         try {
           const sentMsg = await sendArchiveMessage(token, targetChannelId,
-            firstPrizeResult, secondPrizeResult);
+            firstPrizeResult, secondPrizeResult, announceMsg.content);
 
           progressEl.textContent = '第5步完成：归档消息已发送';
 
