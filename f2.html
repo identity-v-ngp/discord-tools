@@ -1,0 +1,802 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>F2 - Discord 活动频道归档</title>
+  <!-- 引入共享样式（全局的基础样式、按钮、表单、结果框等） -->
+  <link rel="stylesheet" href="/shared/style.css">
+
+  <!-- ↓↓↓ F2 页面专属样式（只在本页生效，不影响 f1.html / f3.html） ↓↓↓ -->
+  <style>
+    /* 单选按钮组：每个选项一行，垂直排列 */
+    .radio-group {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    /* 单个单选选项：把圆点、标题、说明排成一块 */
+    .radio-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px;
+      background: #fff;
+      border: 1px solid #dcdfe6;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    /* 鼠标悬停时的提示效果 */
+    .radio-item:hover {
+      border-color: #5865f2;
+      background: #f8f9ff;
+    }
+
+    /* 单选圆点本身，稍微上移一点点对齐文字 */
+    .radio-item input[type="radio"] {
+      margin-top: 3px;
+      width: 16px;
+      height: 16px;
+      accent-color: #5865f2;   /* 圆点选中时的颜色（Discord 蓝） */
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    /* 选项标题文字 */
+    .radio-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #2c3e50;
+    }
+
+    /* 选项下面的灰色说明文字 */
+    .radio-desc {
+      font-size: 12px;
+      color: #7f8c8d;
+      margin-top: 2px;
+    }
+
+    /* 进度显示区：整个大盒子（默认用 style="display:none" 隐藏） */
+    .progress-area {
+      margin-top: 24px;
+      padding: 16px;
+      background: #fff;
+      border: 1px solid #e1e4e8;
+      border-radius: 6px;
+    }
+
+    /* 进度区里的状态文字（比如"等待执行..."） */
+    .status-text {
+      font-size: 14px;
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 12px;
+    }
+
+    /* 进度条的灰色底槽 */
+    .progress-bar-wrap {
+      width: 100%;
+      height: 10px;
+      background: #eceff4;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    /* 进度条里蓝色的填充部分，宽度由 JS 控制（0% ~ 100%） */
+    .progress-bar-fill {
+      width: 0%;
+      height: 100%;
+      background: #5865f2;
+      border-radius: 5px;
+      transition: width 0.3s;
+    }
+
+    /* 进度百分比数字，右对齐显示 */
+    .progress-percent {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #7f8c8d;
+      text-align: right;
+    }
+
+    /* 日志文本框：只读，等宽字体，方便看日志 */
+    .log-box {
+      width: 100%;
+      height: 220px;
+      margin-top: 14px;
+      padding: 10px 12px;
+      font-family: "Cascadia Code", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #2c3e50;
+      background: #fafbfc;
+      border: 1px solid #dcdfe6;
+      border-radius: 6px;
+      resize: vertical;
+      white-space: pre;          /* 保留换行，方便一行行看日志 */
+      overflow: auto;            /* 日志多了可以上下滚动 */
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- 页面主标题 -->
+    <h1>F2: Discord 活动频道归档</h1>
+    <p class="desc">把源频道的内容归档到目标论坛频道</p>
+
+    <!-- ===== 表单区域：所有输入项都放在这里 ===== -->
+    <div id="formArea">
+
+      <!-- Bot Token 输入框（必填，密码框，用完即弃不存储） -->
+      <div class="field">
+        <label for="botToken">Bot Token <span style="color:#e74c3c"> *</span></label>
+        <input type="password" id="botToken" placeholder="请输入机器人的 Token" required>
+      </div>
+
+      <!-- 源频道 ID 输入框（必填） -->
+      <div class="field">
+        <label for="sourceChannelId">源频道 ID（Source Channel ID）<span style="color:#e74c3c"> *</span></label>
+        <input type="text" id="sourceChannelId" placeholder="要搬运内容的源频道 ID">
+      </div>
+
+      <!-- 目标归档论坛 ID 输入框（必填） -->
+      <div class="field">
+        <label for="targetForumId">目标归档论坛 ID（Target Forum ID）<span style="color:#e74c3c"> *</span></label>
+        <input type="text" id="targetForumId" placeholder="内容最终归档到的论坛频道 ID">
+      </div>
+
+      <!-- 归档模式选择区（单选按钮） -->
+      <div class="field">
+        <label>归档模式</label>
+        <div class="radio-group">
+
+          <!-- 模式一：首条摘要模式 -->
+          <label class="radio-item" for="modeSummary">
+            <input type="radio" name="archiveMode" id="modeSummary" value="summary" checked>
+            <span>
+              <span class="radio-title">首条摘要模式</span>
+              <span class="radio-desc">仅搬运首条消息，统计总消息数和首条反应数，适合普通活动</span>
+            </span>
+          </label>
+
+          <!-- 模式二：全量搬运模式 -->
+          <label class="radio-item" for="modeFull">
+            <input type="radio" name="archiveMode" id="modeFull" value="full">
+            <span>
+              <span class="radio-title">全量搬运模式</span>
+              <span class="radio-desc">将源频道所有内容完整搬运为目标论坛的单一帖子，适合精华活动</span>
+            </span>
+          </label>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- 主操作按钮 -->
+    <button class="btn" id="startBtn">开始归档</button>
+
+    <!-- ===== 进度显示区：默认隐藏，校验通过后才显示 ===== -->
+    <div class="progress-area" id="progressArea" style="display:none">
+
+      <!-- 状态文字提示 -->
+      <div class="status-text" id="statusText">等待执行...</div>
+
+      <!-- 可视化进度条（外层是灰色底槽，内层蓝色条由 JS 控制宽度） -->
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="progressBarFill"></div>
+      </div>
+
+      <!-- 进度百分比数字 -->
+      <div class="progress-percent" id="progressPercent">0%</div>
+
+      <!-- 详细日志（只读，实时打印搬运过程） -->
+      <textarea class="log-box" id="logBox" readonly
+        placeholder="归档日志会显示在这里..."></textarea>
+    </div>
+  </div>
+
+  <script type="module">
+    // 从共享核心文件引入延时函数 sleep（等一会儿再继续），用于限速控制
+    import { sleep } from '/shared/core.js';
+
+    // ===== 1. 获取页面上需要用到的所有元素 =====
+    // 注意：这些 id 必须和上面 HTML 里写的 id 一模一样，否则取不到元素
+    const botTokenInput = document.getElementById('botToken');                 // Bot Token 密码框
+    const sourceChannelIdInput = document.getElementById('sourceChannelId');   // 源频道 ID
+    const targetForumIdInput = document.getElementById('targetForumId');       // 目标论坛 ID
+    const startBtn = document.getElementById('startBtn');                       // 开始归档按钮
+    const progressArea = document.getElementById('progressArea');               // 进度区大盒子
+    const statusText = document.getElementById('statusText');                   // 状态文字
+    const progressBarFill = document.getElementById('progressBarFill');         // 进度条填充
+    const progressPercent = document.getElementById('progressPercent');         // 百分比数字
+    const logBox = document.getElementById('logBox');                           // 日志文本框
+
+    // ===== 2. 几个常用的小工具函数（供后续开发复用） =====
+
+    /**
+     * 往日志框里追加一行日志，并自动滚动到最新位置
+     * @param {string} text - 要打印的日志内容
+     */
+    function appendLog(text) {
+      // 如果不是第一行，先补一个换行符
+      if (logBox.value.length > 0) {
+        logBox.value += '\n';
+      }
+      logBox.value += text;
+      // 让日志框自动滚到最底部，方便看到最新日志
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+
+    /**
+     * 更新进度：同时改变进度条宽度、百分比数字和状态文字
+     * @param {number} percent - 进度百分比，0 ~ 100
+     * @param {string} text - 状态文字（不传则只更新进度条）
+     */
+    function updateProgress(percent, text) {
+      // 防止传入超出范围的数值（比如 -5 或 200）
+      const safePercent = Math.max(0, Math.min(100, percent));
+      progressBarFill.style.width = safePercent + '%';
+      progressPercent.textContent = Math.round(safePercent) + '%';
+      if (text !== undefined) {
+        statusText.textContent = text;
+      }
+    }
+
+    /**
+     * 读取当前界面所处的"归档模式"，返回中文名称，用于日志展示
+     * @returns {string} "首条摘要模式" 或 "全量搬运模式"
+     */
+    function getCurrentModeName() {
+      // 取出当前被选中的那个单选按钮（name="archiveMode"）
+      const checked = document.querySelector('input[name="archiveMode"]:checked');
+      if (!checked) return '未知模式';
+      return checked.value === 'full' ? '全量搬运模式' : '首条摘要模式';
+    }
+
+    // ===== 3. 可调参数（觉得太快/太慢，改这里就行） =====
+    // 循环发送消息时，每发一条之间强制等待的毫秒数（防止触发 Discord 限速）
+    const SEND_DELAY_MS = 1000;
+    // 遇到 429（请求太频繁被限流）时，最多自动重试几次
+    const MAX_RETRY_429 = 3;
+    // 遇到 429 但 Discord 没告诉我们要等多久时，默认等待的毫秒数
+    const DEFAULT_RETRY_WAIT_MS = 2000;
+    // 分页拉取的安全上限（每页最多 100 条，100 页 = 最多 10000 条）
+    // 作用是防止极端情况下 while 循环停不下来
+    const MAX_PAGES = 100;
+
+    // 当前这次运行使用的 Bot Token。
+    // 只在点击"开始归档"时填进来，页面刷新就没了，不会保存到任何地方。
+    let activeToken = '';
+
+    // ===== 4. 与后端代理通信（带 429 自动重试） =====
+    /**
+     * 调用 F2 的后端代理 /api/f2-proxy
+     * 如果 Discord 返回 429（限流），会自动等待后重试，最多重试 MAX_RETRY_429 次，
+     * 不会让整个归档流程直接崩掉。
+     *
+     * @param {string} action - 动作名，见 f2-proxy.js 顶部说明
+     * @param {object} params - 路径参数，例如 { channelId: '123' }
+     * @param {object} body - 只有"创建帖子/发消息"这类动作需要
+     * @returns {Promise<any>} Discord 返回的 JSON 数据
+     */
+    async function callF2Proxy(action, params, body) {
+      // 安全检查：没有 Token 就绝不发请求。
+      // 正常情况下不会触发（点击按钮时已校验并赋值），这里只是兜底防止空 Token 请求。
+      if (!activeToken) {
+        throw new Error('Bot Token 为空，请刷新页面后重新填写');
+      }
+
+      let attempt = 0; // 已经重试过几次
+
+      // while(true) 配合 continue，实现"失败了就等到再试一次"
+      while (true) {
+        const res = await fetch('/api/f2-proxy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            token: activeToken,
+            action: action,
+            params: params || {},
+            body: body
+          })
+        });
+
+        // ---- 情况一：被限流（HTTP 429）→ 等待后自动重试 ----
+        if (res.status === 429) {
+          // 重试次数用完了，才真正报错
+          if (attempt >= MAX_RETRY_429) {
+            throw new Error('被 Discord 限流（429），已自动重试 ' + MAX_RETRY_429 + ' 次仍未成功');
+          }
+          attempt++;
+
+          // 读取 Discord 要求等待的秒数；读不到就用默认值
+          let waitMs = DEFAULT_RETRY_WAIT_MS;
+          try {
+            const data = await res.json();
+            // retry_after 单位是"秒"，乘以 1000 换成毫秒
+            if (data && data.retry_after) {
+              waitMs = Math.ceil(data.retry_after * 1000);
+            }
+          } catch {
+            // 响应不是 JSON（读不出来）就用默认等待时间
+          }
+
+          appendLog('[限流] Discord 返回 429，等待 ' + (waitMs / 1000).toFixed(1) +
+            ' 秒后自动重试（第 ' + attempt + ' / ' + MAX_RETRY_429 + ' 次）');
+
+          // 阻塞等待一段时间，然后回到 while 开头重新发请求
+          await sleep(waitMs);
+          continue;
+        }
+
+        // ---- 情况二：其它错误 → 抛出异常，由上层统一提示 ----
+        if (!res.ok) {
+          let detail = '';   // Discord 给的错误说明
+          let code = null;   // Discord 的错误码（比如 50013 是权限不足）
+          try {
+            const data = await res.json();
+            detail = (data && (data.message || data.error)) || '';
+            code = data ? data.code : null;
+          } catch {
+            // 读不出来就算了，下面用状态码提示
+          }
+          const err = new Error('请求失败 (HTTP ' + res.status + ')' + (detail ? '：' + detail : ''));
+          err.httpStatus = res.status;  // 记下 HTTP 状态码
+          err.discordCode = code;       // 记下 Discord 错误码
+          throw err;
+        }
+
+        // ---- 情况三：成功 → 把数据交回去 ----
+        return await res.json();
+      }
+    }
+
+    // ===== 5. 内容处理相关的小工具 =====
+
+    /**
+     * 把文字截断到指定长度，超出的部分用省略号代替。
+     * Discord 对消息正文有 2000 字上限、帖子标题有 100 字上限，
+     * 不截断的话超长内容会被 Discord 直接拒绝。
+     *
+     * @param {string} text - 原始文字
+     * @param {number} maxLength - 允许的最大长度
+     * @returns {string} 截断后的文字
+     */
+    function truncateText(text, maxLength) {
+      // 兜底：文字是空/未定义时，返回空字符串，避免后面拼接出 "undefined"
+      const safeText = (text === undefined || text === null) ? '' : String(text);
+      if (safeText.length <= maxLength) return safeText;
+      return safeText.slice(0, maxLength - 1) + '…';
+    }
+
+    /**
+     * 把一条原始消息重新组装成归档用的正文
+     * 规则：开头标注原作者 → 原文 → 附件链接 → （主楼）互动统计
+     *
+     * @param {object} msg - Discord 的消息对象
+     * @param {boolean} isFirst - 是不是本次搬运的第一条（主楼）
+     * @returns {string} 组装好的正文
+     */
+    function formatArchiveContent(msg, isFirst) {
+      // ① 取原作者用户名（层层兜底，任何一层取不到都不会变成 undefined）
+      const username = (msg && msg.author && msg.author.username)
+        ? msg.author.username
+        : '未知用户';
+
+      // ② 开头固定加上原作者标注
+      let text = '[原作者: @' + username + ']\n\n';
+
+      // ③ 接上消息原本的正文（可能为空）
+      text += (msg && msg.content) ? msg.content : '';
+
+      // ④ 如果带有附件（图片、文件等），把它们的链接追加到末尾
+      if (msg && Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+        const urls = [];
+        for (const att of msg.attachments) {
+          if (att && att.url) urls.push(att.url);
+        }
+        if (urls.length > 0) {
+          text += '\n\n' + urls.join('\n');
+        }
+      }
+
+      // ⑤ 如果是主楼、且原本有表情反应，统计反应总次数追加到末尾
+      if (isFirst && msg && Array.isArray(msg.reactions) && msg.reactions.length > 0) {
+        let reactionCount = 0;
+        for (const r of msg.reactions) {
+          // 每种表情的个数累加，得到"总互动次数"
+          if (r && typeof r.count === 'number') reactionCount += r.count;
+        }
+        text += '\n\n[原帖互动：总计 ' + reactionCount + ' 次反应]';
+      }
+
+      // ⑥ 最后统一截断到 Discord 允许的 2000 字以内
+      return truncateText(text, 2000);
+    }
+
+    // ===== 6. 阶段一：拉取数据 =====
+
+    /**
+     * 【普通聊天频道】分页拉取全部历史消息
+     * Discord 一次最多只给 100 条，所以要拿"上一页最旧那条消息的 ID"当作
+     * 下一页的 before 参数，一页一页往前翻，直到翻完。
+     *
+     * @param {string} channelId - 源频道 ID
+     * @returns {Promise<object[]>} 消息数组，已按时间正序（最旧的在最前面）
+     */
+    async function fetchAllSourceMessages(channelId) {
+      const allMessages = [];
+      let before = null;   // 翻页游标：只取比这个 ID 更早的消息
+      let pageIndex = 0;   // 当前是第几页
+
+      while (true) {
+        pageIndex++;
+
+        // 组装参数：limit 固定用 100（Discord 允许的最大值）
+        const params = { channelId: channelId, limit: 100 };
+        if (before) {
+          params.before = before; // 第一页不传 before，表示从最新的开始取
+        }
+
+        const page = await callF2Proxy('getMessages', params);
+
+        // 返回的不是数组、或者已经空了 → 说明翻到底了
+        if (!Array.isArray(page) || page.length === 0) {
+          break;
+        }
+
+        // Discord 返回的顺序是"从新到旧"，先整段接在数组后面
+        allMessages.push(...page);
+
+        // 实时更新界面：已经拉了多少条
+        updateProgress(0, '正在分页拉取历史消息... 已拉取 ' + allMessages.length + ' 条');
+        appendLog('[拉取] 第 ' + pageIndex + ' 页：本页 ' + page.length + ' 条，累计 ' + allMessages.length + ' 条');
+
+        // 本页不足 100 条，说明这是最后一页
+        if (page.length < 100) {
+          break;
+        }
+
+        // 关键：把本页最旧的那条消息 ID 作为下一页的 before
+        // （因为返回顺序是从新到旧，所以数组里最后一个元素就是最旧的）
+        before = page[page.length - 1].id;
+
+        // 安全阀：翻得太多就停下，防止意外情况下的死循环
+        if (pageIndex >= MAX_PAGES) {
+          appendLog('[警告] 已达到最大分页数 ' + MAX_PAGES + ' 页，停止继续翻页');
+          break;
+        }
+      }
+
+      // Discord 给的是"新 → 旧"，这里倒序一次变成"旧 → 新"，保持原本的时间线
+      allMessages.reverse();
+
+      appendLog('[拉取] 拉取完成，共 ' + allMessages.length + ' 条消息，已按时间正序排列');
+      return allMessages;
+    }
+
+    /**
+     * 【论坛频道】拉取论坛里所有帖子的"首楼消息"（第一条消息）
+     * 论坛里每个帖子本身就是一个 Thread，活跃帖子和已归档帖子要用不同接口拿。
+     *
+     * @param {string} channelId - 论坛频道 ID
+     * @param {string} guildId - 服务器 ID（获取活跃帖子需要用到）
+     * @returns {Promise<object[]>} 各帖子的首楼消息，已按时间正序排列
+     */
+    async function fetchForumFirstMessages(channelId, guildId) {
+      const threadIds = [];  // 先收集所有帖子的 ID
+
+      // ---- ① 活跃帖子 ----
+      try {
+        updateProgress(0, '正在获取活跃帖子...');
+
+        const activeData = await callF2Proxy('getActiveThreads', {
+          channelId: channelId,
+          guildId: guildId
+        });
+
+        const activeThreads = (activeData && Array.isArray(activeData.threads))
+          ? activeData.threads
+          : [];
+
+        // 活跃帖子接口返回的是"整个服务器"的帖子，所以只挑属于本论坛的
+        // parent_id（父频道 ID）等于本论坛 ID 的，才是这个论坛里的帖子
+        let matched = 0;
+        for (const t of activeThreads) {
+          if (t && t.id && t.parent_id === channelId) {
+            threadIds.push(t.id);
+            matched++;
+          }
+        }
+        appendLog('[论坛] 活跃帖子：本论坛 ' + matched + ' 个（服务器共 ' + activeThreads.length + ' 个）');
+      } catch (err) {
+        // 活跃帖子拿不到不影响整体流程，记录后继续
+        appendLog('[警告] 获取活跃帖子失败，跳过：' + err.message);
+      }
+
+      // ---- ② 已归档帖子（需要一页页翻） ----
+      let before = null;
+      let archivedCount = 0;
+      let pageIndex = 0;
+
+      while (true) {
+        pageIndex++;
+
+        const params = { channelId: channelId, limit: 100 };
+        if (before) {
+          params.before = before; // 用上一页最后一个帖子的归档时间作为游标
+        }
+
+        let data;
+        try {
+          data = await callF2Proxy('getArchivedThreads', params);
+        } catch (err) {
+          appendLog('[警告] 获取已归档帖子失败，跳过：' + err.message);
+          break;
+        }
+
+        const threads = (data && Array.isArray(data.threads)) ? data.threads : [];
+
+        for (const t of threads) {
+          if (t && t.id) threadIds.push(t.id);
+        }
+        archivedCount += threads.length;
+
+        updateProgress(0, '正在获取已归档帖子... 已获取 ' + archivedCount + ' 个');
+        appendLog('[论坛] 已归档第 ' + pageIndex + ' 页：' + threads.length + ' 个，累计 ' + archivedCount + ' 个');
+
+        // has_more 为 false，或者本页没数据 → 说明翻完了
+        if (!data || !data.has_more || threads.length === 0) {
+          break;
+        }
+
+        // 取本页最后一个帖子的归档时间，作为下一页的游标
+        const lastThread = threads[threads.length - 1];
+        before = (lastThread && lastThread.thread_metadata)
+          ? lastThread.thread_metadata.archive_timestamp
+          : null;
+
+        // 拿不到游标就停下，避免一直翻同一页造成死循环
+        if (!before) break;
+
+        if (pageIndex >= MAX_PAGES) {
+          appendLog('[警告] 已达到最大分页数 ' + MAX_PAGES + ' 页，停止继续翻页');
+          break;
+        }
+      }
+
+      appendLog('[论坛] 共找到 ' + threadIds.length + ' 个帖子，开始逐个读取首楼消息...');
+
+      // ---- ③ 逐个帖子读取它的首楼消息 ----
+      const firstMessages = [];
+
+      for (let i = 0; i < threadIds.length; i++) {
+        const threadId = threadIds[i];
+        updateProgress(0, '正在读取帖子首楼消息... ' + (i + 1) + ' / ' + threadIds.length);
+
+        try {
+          // 关键技巧：after 传 '0' 表示"取比 0 号更晚的消息"，也就是从最开始取，
+          // 再配合 limit=1，拿到的就是帖子里最早的那条消息 = 首楼消息。
+          const msgs = await callF2Proxy('getMessages', {
+            channelId: threadId,
+            limit: 1,
+            after: '0'
+          });
+
+          if (Array.isArray(msgs) && msgs.length > 0) {
+            firstMessages.push(msgs[0]);
+          }
+        } catch (err) {
+          // 个别帖子读不到不影响整体，跳过并记录
+          appendLog('[警告] 帖子 ' + threadId + ' 的首楼消息读取失败，跳过：' + err.message);
+        }
+      }
+
+      // 按消息时间排序（正序：最旧的在最前面）
+      firstMessages.sort(function (a, b) {
+        const timeA = (a && a.timestamp) ? Date.parse(a.timestamp) : 0;
+        const timeB = (b && b.timestamp) ? Date.parse(b.timestamp) : 0;
+        return timeA - timeB;
+      });
+
+      appendLog('[论坛] 共获取到 ' + firstMessages.length + ' 条首楼消息，已按时间正序排列');
+      return firstMessages;
+    }
+
+    // ===== 7. 归档主流程（整个工具的"调度大脑"） =====
+    /**
+     * 开始执行归档流程，一共三个阶段：
+     *   阶段一（拉）：判断源类型 → 拉取所有消息
+     *   阶段二（洗）：按模式筛选 → 重新组装正文格式
+     *   阶段三（推）：在目标论坛创建主帖 → 把剩余消息逐条发进帖子里
+     */
+    async function startArchivingProcess() {
+      // 取出这次运行需要的输入
+      const sourceId = sourceChannelIdInput.value.trim();
+      const targetForumId = targetForumIdInput.value.trim();
+
+      // 读取当前选中的归档模式：'summary'（首条摘要）或 'full'（全量搬运）
+      const modeRadio = document.querySelector('input[name="archiveMode"]:checked');
+      const modeValue = modeRadio ? modeRadio.value : 'summary';
+
+      // ---------- 阶段一：拉取 ----------
+      // 第 1 小步：先获取源频道信息，判断它是普通频道还是论坛
+      updateProgress(2, '正在获取源频道信息...');
+      const channelInfo = await callF2Proxy('getChannel', { channelId: sourceId });
+
+      // 兜底取出用得到的字段
+      const channelName = (channelInfo && channelInfo.name) ? channelInfo.name : sourceId;
+      const channelType = channelInfo ? channelInfo.type : null;
+      const guildId = channelInfo ? channelInfo.guild_id : null;
+
+      appendLog('[信息] 源频道名称：' + channelName + '，类型 type=' + channelType);
+
+      // Discord 里论坛频道的类型编号是 15
+      const isForum = (channelType === 15);
+
+      let sourceMessages = [];
+      if (isForum) {
+        appendLog('[信息] 检测到源是【论坛频道】，改为拉取论坛里的帖子');
+        sourceMessages = await fetchForumFirstMessages(sourceId, guildId);
+      } else {
+        appendLog('[信息] 检测到源是【普通频道】，开始分页拉取历史消息');
+        sourceMessages = await fetchAllSourceMessages(sourceId);
+      }
+
+      const totalFetched = sourceMessages.length;
+      updateProgress(15, '拉取完成，共 ' + totalFetched + ' 条消息');
+
+      // 一条都没拉到就没必要继续了
+      if (totalFetched === 0) {
+        throw new Error('源频道里没有拉到任何消息，请检查频道 ID、Bot 是否已加入该服务器');
+      }
+
+      // ---------- 阶段二：处理与过滤 ----------
+      let messagesToMove = sourceMessages;
+
+      if (modeValue === 'summary') {
+        // 首条摘要模式：只保留时间最早的第 1 条
+        messagesToMove = sourceMessages.slice(0, 1);
+        appendLog('[处理] 首条摘要模式：共拉到 ' + totalFetched + ' 条，只搬运最早的第 1 条');
+      } else {
+        appendLog('[处理] 全量搬运模式：共 ' + totalFetched + ' 条，全部搬运');
+      }
+
+      // 逐条重写正文（标注原作者、追加附件链接、主楼追加互动统计）
+      const formattedContents = messagesToMove.map(function (msg, index) {
+        return formatArchiveContent(msg, index === 0);
+      });
+
+      updateProgress(20, '内容整理完成，准备发送');
+
+      // ---------- 阶段三：发送归档 ----------
+      // 第 1 小步：在目标论坛创建主帖，把整理好的第 1 条消息作为帖子内容
+      const today = new Date().toISOString().slice(0, 10); // 形如 2026-10-15
+      const threadTitle = truncateText('[归档] ' + channelName + ' - ' + today, 100);
+
+      appendLog('[发送] 正在目标论坛创建主帖，标题：' + threadTitle);
+
+      const newThread = await callF2Proxy(
+        'createThread',
+        { forumId: targetForumId },
+        {
+          name: threadTitle,
+          // 论坛帖子的首楼内容要放在 message.content 里
+          message: { content: formattedContents[0] }
+        }
+      );
+
+      const newThreadId = newThread ? newThread.id : null;
+      if (!newThreadId) {
+        throw new Error('创建主帖失败：Discord 没有返回新帖子的 ID');
+      }
+
+      appendLog('[发送] ✅ 主帖创建成功，帖子 ID：' + newThreadId);
+      updateProgress(30, '主帖创建成功，准备搬运后续消息');
+
+      // 第 2 小步：把剩余的消息依次发进这个新帖子里
+      const remaining = formattedContents.slice(1);
+
+      if (remaining.length === 0) {
+        appendLog('[发送] 没有后续消息需要搬运');
+      } else {
+        appendLog('[发送] 还有 ' + remaining.length + ' 条消息要发送，每条之间会等待 ' +
+          (SEND_DELAY_MS / 1000) + ' 秒以防触发限速');
+      }
+
+      for (let i = 0; i < remaining.length; i++) {
+        // 进度从 30% 平滑涨到 99%
+        const percent = 30 + ((i + 1) / remaining.length) * 69;
+        updateProgress(percent, '正在发送第 ' + (i + 1) + ' / ' + remaining.length + ' 条消息...');
+
+        await callF2Proxy(
+          'sendMessage',
+          { channelId: newThreadId },
+          { content: remaining[i] }
+        );
+
+        appendLog('[发送] 第 ' + (i + 1) + ' / ' + remaining.length + ' 条发送成功');
+
+        // 主动降速：每发完一条就等一会儿，避免被 Discord 限速
+        // （最后一条后面不用再等了，省点时间）
+        if (i < remaining.length - 1) {
+          await sleep(SEND_DELAY_MS);
+        }
+      }
+
+      // ---------- 全部完成 ----------
+      updateProgress(100, '🎉 归档完成！');
+      appendLog('[完成] ✅ 归档成功！共搬运 ' + messagesToMove.length +
+        ' 条消息（源频道共 ' + totalFetched + ' 条）');
+      appendLog('[完成] 主帖地址：https://discord.com/channels/' +
+        (guildId || '{服务器ID}') + '/' + newThreadId);
+    }
+
+    // ===== 8. 监听"开始归档"按钮的点击 =====
+    startBtn.addEventListener('click', async () => {
+      // ---- 8.1 取出三个输入框里的内容，并去掉首尾空格 ----
+      const token = botTokenInput.value.trim();
+      const sourceChannelId = sourceChannelIdInput.value.trim();
+      const targetForumId = targetForumIdInput.value.trim();
+
+      // ---- 8.2 基础表单校验：任何一项为空就弹窗提示并中断 ----
+      if (!token) {
+        alert('请先填写 Bot Token');
+        return; // return 表示直接结束，后面的代码不再执行
+      }
+      if (!sourceChannelId) {
+        alert('请填写源频道 ID（Source Channel ID）');
+        return;
+      }
+      if (!targetForumId) {
+        alert('请填写目标归档论坛 ID（Target Forum ID）');
+        return;
+      }
+
+      // ---- 8.3 校验通过：禁用按钮（防止重复点击），并显示进度区 ----
+      startBtn.disabled = true;
+      progressArea.style.display = 'block';
+
+      // ---- 8.4 初始化进度显示：清空日志、进度归零、状态改为"准备中" ----
+      logBox.value = '';
+      updateProgress(0, '等待执行...');
+
+      // ---- 8.5 把 Token 交给代理函数使用（页面刷新即失效，不会保存） ----
+      // 只是记在内存变量里，供 callF2Proxy 放进请求体的 token 字段。
+      // 不写 localStorage、不写 Cookie、不打进日志，页面一刷新就没了。
+      activeToken = token;
+
+      // 只打印 Token 长度做"已收到"的确认，绝不打印 Token 本身，避免泄露
+      appendLog('[系统] 已接收 Bot Token（长度 ' + token.length + '，仅存于内存，用完即弃）');
+
+      // ---- 8.6 打印第一行初始化日志 ----
+      const modeName = getCurrentModeName();
+      appendLog('[系统] UI 初始化成功，准备开始归档... 源频道: ' + sourceChannelId + ', 模式: ' + modeName);
+
+      // ---- 8.7 调用真正的归档流程 ----
+      // 用 try...catch 包住，万一过程中报错，也能在界面上看到提示
+      try {
+        await startArchivingProcess();
+      } catch (err) {
+        appendLog('[错误] 归档过程出现异常：' + err.message);
+
+        // 权限类错误单独给一句更直白的排查提示
+        if (err.discordCode === 50013 || err.discordCode === 50001 || err.httpStatus === 403) {
+          appendLog('[提示] 这通常是 Bot 缺少权限：请确认 Bot 已加入目标服务器，' +
+            '并且对目标论坛拥有「创建帖子」和「发送消息」权限');
+        }
+        statusText.textContent = '执行出错';
+      } finally {
+        // 无论成功还是失败，最后都恢复按钮，方便再次运行
+        startBtn.disabled = false;
+      }
+    });
+  </script>
+
+</body>
+</html>
