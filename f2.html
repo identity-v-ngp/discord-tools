@@ -258,6 +258,52 @@
       return checked.value === 'full' ? '全量搬运模式' : '首条摘要模式';
     }
 
+    // ---- 出错定位辅助：记录"现在正在执行哪一步" ----
+    // 当前正在执行的步骤名称（出错时会打印出来，方便知道是哪一步挂了）
+    let currentStepLabel = '尚未开始';
+    // 当前步骤是否属于"往目标论坛写内容"：
+    //   false = 读源频道（源频道权限问题）
+    //   true  = 写目标论坛（目标频道权限问题）
+    // 出错时靠它判断到底是源的权限不够，还是目标的权限不够
+    let currentStepIsTarget = false;
+
+    /**
+     * 记录"现在开始执行哪一步"，同时往日志里打一行
+     * @param {string} label - 步骤名称，例如「第1步 获取源频道信息」
+     * @param {boolean} isTarget - 这一步是不是在操作目标论坛（写操作）
+     */
+    function setStep(label, isTarget) {
+      currentStepLabel = label;
+      currentStepIsTarget = (isTarget === true);
+      appendLog('[步骤] ' + label);
+    }
+
+    /**
+     * 把一次代理调用翻译成"人话"，出错时用来说明到底请求了什么、用了哪个 ID
+     * @param {string} action - 动作名
+     * @param {object} params - 请求参数
+     * @returns {string} 例如「获取频道信息（channelId=123）」
+     */
+    function describeF2Request(action, params) {
+      const p = params || {};
+      switch (action) {
+        case 'getChannel':
+          return '获取频道信息（channelId=' + p.channelId + '）';
+        case 'getMessages':
+          return '拉取消息（channelId=' + p.channelId + (p.before ? '，before=' + p.before : '') + '）';
+        case 'createThread':
+          return '创建论坛帖子（forumId=' + p.forumId + '）';
+        case 'sendMessage':
+          return '发送消息（channelId=' + p.channelId + '）';
+        case 'getActiveThreads':
+          return '获取活跃帖子（channelId=' + p.channelId + '）';
+        case 'getArchivedThreads':
+          return '获取已归档帖子（channelId=' + p.channelId + '）';
+        default:
+          return '动作 ' + action;
+      }
+    }
+
     // ===== 3. 可调参数（觉得太快/太慢，改这里就行） =====
     // 循环发送消息时，每发一条之间强制等待的毫秒数（防止触发 Discord 限速）
     const SEND_DELAY_MS = 1000;
@@ -308,9 +354,16 @@
 
         // ---- 情况一：被限流（HTTP 429）→ 等待后自动重试 ----
         if (res.status === 429) {
-          // 重试次数用完了，才真正报错
+          // 重试次数用完了，才真正报错（报错里带上当前步骤，方便定位）
           if (attempt >= MAX_RETRY_429) {
-            throw new Error('被 Discord 限流（429），已自动重试 ' + MAX_RETRY_429 + ' 次仍未成功');
+            const err = new Error(
+              '【' + currentStepLabel + '】' +
+              describeF2Request(action, params) +
+              ' 被 Discord 限流（429），已自动重试 ' + MAX_RETRY_429 + ' 次仍未成功'
+            );
+            err.stepLabel = currentStepLabel;
+            err.isTargetStep = currentStepIsTarget;
+            throw err;
           }
           attempt++;
 
@@ -337,7 +390,7 @@
         // ---- 情况二：其它错误 → 抛出异常，由上层统一提示 ----
         if (!res.ok) {
           let detail = '';   // Discord 给的错误说明
-          let code = null;   // Discord 的错误码（比如 50013 是权限不足）
+          let code = null;   // Discord 的错误码（例如 50001 无访问权限、50013 缺少权限）
           try {
             const data = await res.json();
             detail = (data && (data.message || data.error)) || '';
@@ -345,9 +398,19 @@
           } catch {
             // 读不出来就算了，下面用状态码提示
           }
-          const err = new Error('请求失败 (HTTP ' + res.status + ')' + (detail ? '：' + detail : ''));
-          err.httpStatus = res.status;  // 记下 HTTP 状态码
-          err.discordCode = code;       // 记下 Discord 错误码
+
+          // 错误信息里带上【当前步骤】和【具体请求了什么、用了哪个 ID】，
+          // 这样看日志就能一眼分辨：是源频道出的问题，还是目标论坛出的问题
+          const err = new Error(
+            '【' + currentStepLabel + '】' +
+            describeF2Request(action, params) +
+            ' 失败 (HTTP ' + res.status + ')' +
+            (detail ? '：' + detail : '')
+          );
+          err.httpStatus = res.status;            // 记下 HTTP 状态码
+          err.discordCode = code;                 // 记下 Discord 错误码
+          err.stepLabel = currentStepLabel;       // 记下失败时所在的步骤
+          err.isTargetStep = currentStepIsTarget; // 记下这是源操作还是目标操作
           throw err;
         }
 
@@ -626,6 +689,7 @@
 
       // ---------- 阶段一：拉取 ----------
       // 第 1 小步：先获取源频道信息，判断它是普通频道还是论坛
+      setStep('第1步 获取源频道信息（读源频道）', false);
       updateProgress(2, '正在获取源频道信息...');
       const channelInfo = await callF2Proxy('getChannel', { channelId: sourceId });
 
@@ -642,9 +706,11 @@
       let sourceMessages = [];
       if (isForum) {
         appendLog('[信息] 检测到源是【论坛频道】，改为拉取论坛里的帖子');
+        setStep('第2步 拉取源论坛的帖子与首楼消息（读源频道）', false);
         sourceMessages = await fetchForumFirstMessages(sourceId, guildId);
       } else {
         appendLog('[信息] 检测到源是【普通频道】，开始分页拉取历史消息');
+        setStep('第2步 分页拉取源频道历史消息（读源频道）', false);
         sourceMessages = await fetchAllSourceMessages(sourceId);
       }
 
@@ -681,6 +747,9 @@
 
       appendLog('[发送] 正在目标论坛创建主帖，标题：' + threadTitle);
 
+      // 标记：从这里开始都是"写目标论坛"的操作，出错时提示会指向目标频道权限
+      setStep('第3步 在目标论坛创建主帖（写目标频道）', true);
+
       const newThread = await callF2Proxy(
         'createThread',
         { forumId: targetForumId },
@@ -707,6 +776,8 @@
       } else {
         appendLog('[发送] 还有 ' + remaining.length + ' 条消息要发送，每条之间会等待 ' +
           (SEND_DELAY_MS / 1000) + ' 秒以防触发限速');
+        // 标记：往主帖里发消息，同样属于"写目标论坛"
+        setStep('第4步 向目标论坛主帖发送后续消息（写目标频道）', true);
       }
 
       for (let i = 0; i < remaining.length; i++) {
@@ -783,14 +854,40 @@
       try {
         await startArchivingProcess();
       } catch (err) {
-        appendLog('[错误] 归档过程出现异常：' + err.message);
+        // 失败时把"是哪一步、哪个请求、哪个 ID"全部打出来，方便定位问题
+        const stepLabel = err.stepLabel || currentStepLabel;
+        appendLog('[错误] ❌ 失败于：' + stepLabel);
+        appendLog('[错误] 具体原因：' + err.message);
 
-        // 权限类错误单独给一句更直白的排查提示
-        if (err.discordCode === 50013 || err.discordCode === 50001 || err.httpStatus === 403) {
-          appendLog('[提示] 这通常是 Bot 缺少权限：请确认 Bot 已加入目标服务器，' +
-            '并且对目标论坛拥有「创建帖子」和「发送消息」权限');
+        // 判断是不是权限类错误：
+        //   50001 = Missing Access（Bot 根本看不到这个频道/服务器）
+        //   50013 = Missing Permissions（能看到，但权限不够做这个操作）
+        //   403   = HTTP 层的权限不足
+        const isPermissionError =
+          err.discordCode === 50001 ||
+          err.discordCode === 50013 ||
+          err.httpStatus === 403;
+
+        if (isPermissionError) {
+          // 用错误发生时记录的"是源还是目标"来决定给哪一套排查建议
+          // （本地代码抛出的错误没有这个标记，就退回用当前步骤的判断）
+          const isTarget = (err.isTargetStep !== undefined) ? err.isTargetStep : currentStepIsTarget;
+
+          if (isTarget === true) {
+            appendLog('[提示] 这属于【目标频道】的权限问题，请依次检查：');
+            appendLog('       ① Bot 是否已经加入目标论坛所在的服务器？');
+            appendLog('       ② Bot 对目标论坛是否有「创建帖子」权限？（论坛频道需要「管理帖子」或「发送消息」）');
+            appendLog('       ③ 目标论坛 ID 是否填对了？（论坛频道 ID，不是里面某个帖子的 ID）');
+          } else {
+            appendLog('[提示] 这属于【源频道】的权限问题，请依次检查：');
+            appendLog('       ① Bot 是否已经加入源频道所在的服务器？（没加入就会报 50001）');
+            appendLog('       ② Bot 对该频道是否有「查看频道」和「查看消息历史」权限？');
+            appendLog('       ③ 源频道 ID 是否填对了？（不要填成评论区的 ID 或别的服务器的频道 ID）');
+            appendLog('       ④ 如果源是论坛频道，Bot 还需要能够查看帖子内容。');
+          }
         }
-        statusText.textContent = '执行出错';
+
+        statusText.textContent = '执行出错：' + stepLabel;
       } finally {
         // 无论成功还是失败，最后都恢复按钮，方便再次运行
         startBtn.disabled = false;
