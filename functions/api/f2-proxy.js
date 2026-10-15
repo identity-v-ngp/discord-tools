@@ -213,6 +213,27 @@ export async function onRequestPost(context) {
     return Response.json({ error: '缺少必要参数：action（要执行的动作名）' }, { status: 400 });
   }
 
+  // ===== 第 1.5 步：把 Token 整理成 Discord 要求的标准形式 =====
+  // Discord 强制要求：请求头里必须是「Bot + 一个空格 + 纯 Token」，例如：Bot MTIzNDU2...
+  // 为了容错，这里先做三件事（都是针对"复制粘贴"常见的坑）：
+  //   ① 去掉首尾的空格和换行（从网页复制 Token 时经常会多带一个换行）
+  //   ② 如果用户把 "Bot " 前缀也一起粘进来了，就把它去掉，
+  //      否则拼出来会变成 "Bot Bot xxx"，Discord 会直接鉴权失败
+  //   ③ 去掉可能被一起复制进来的首尾引号
+  const cleanToken = String(token)
+    .trim()
+    .replace(/^Bot\s+/i, '')
+    .replace(/^["']|["']$/g, '')
+    .trim();
+
+  // 整理完是空的，说明 Token 内容本身有问题
+  if (!cleanToken) {
+    return Response.json(
+      { error: 'Bot Token 内容为空，请检查是否填写正确' },
+      { status: 400 }
+    );
+  }
+
   // ===== 第 2 步：用白名单把动作翻译成真实的请求方法 + 路径 =====
   const plan = buildDiscordRequest(action, params);
 
@@ -238,8 +259,11 @@ export async function onRequestPost(context) {
     res = await fetch(url, {
       method: plan.method,
       headers: {
-        // Bot Token 只在这一次请求里使用，本文件不打印、不记录、不存储
-        'Authorization': 'Bot ' + token,
+        // Discord 强制要求：Authorization 必须是「Bot + 空格 + 纯 Token」的格式。
+        // 少了 "Bot " 前缀，Discord 会把它当成普通用户 Token，导致鉴权失败。
+        // 这里用的是上面第 1.5 步整理过的 cleanToken（已去掉误粘的前缀和空格）。
+        // Token 只在这一次请求里使用，本文件不打印、不记录、不存储。
+        'Authorization': 'Bot ' + cleanToken,
         'Content-Type': 'application/json',
         'User-Agent': 'DiscordTools (1.0)'
       },
