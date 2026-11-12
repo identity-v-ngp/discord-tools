@@ -254,12 +254,19 @@
         });
       }
 
-      // 从公告原文提取前3行非空文本作为消息头
-      const headerLines = (announceContent || '')
+      // 归档卡片上方的固定引入文案（以后想改这句话，改这里即可）
+      const ARCHIVE_INTRO_TEXT = 'Dear visitors, please enjoy the masterpieces from...';
+
+      // 只取原公告的第一条非空内容，作为活动名称
+      const firstLine = (announceContent || '')
         .split('\n')
-        .filter(line => line.trim() !== '')
-        .slice(0, 3);
-      const headerText = headerLines.join('\n');
+        .map(line => line.trim())
+        .find(line => line !== '') || '';
+
+      // 固定引入文案 + 换行 + 活动名称；若公告为空或无有效第一行，只发固定文案
+      const headerText = firstLine
+        ? ARCHIVE_INTRO_TEXT + '\n' + firstLine
+        : ARCHIVE_INTRO_TEXT;
 
       const body = {
         content: headerText,
